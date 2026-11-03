@@ -1,15 +1,9 @@
 import type { AdvisoryLock } from "../persistence/advisory-lock.ts";
 import { createTtlRefresh } from "../util/async.ts";
-import type { DurableMap } from "../persistence/durable-map.ts";
 import { foldPrincipalId, type PrincipalLinkResolver } from "../directory/person.ts";
+import type { UserLink, UserLinkStore } from "./user-store.ts";
 
-export interface PrincipalLink {
-  principalId: string;
-  canonicalId: string;
-  evidence: string;
-  linkedBy: string;
-  createdAt: number;
-}
+export type PrincipalLink = UserLink;
 
 interface PrincipalLinkInput {
   principalId: unknown;
@@ -41,7 +35,7 @@ function validId(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.trim().length <= MAX_ID_LENGTH;
 }
 
-export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, lock: AdvisoryLock): PrincipalLinkService {
+export function createPrincipalLinkService(store: UserLinkStore, lock: AdvisoryLock): PrincipalLinkService {
   const byAlias = new Map<string, PrincipalLink>();
   const byCanonical = new Map<string, PrincipalLink[]>();
 
@@ -57,7 +51,7 @@ export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, loc
     }
   }
 
-  const refresh = createTtlRefresh(REFRESH_TTL_MS, async () => index(await store.all()));
+  const refresh = createTtlRefresh(REFRESH_TTL_MS, async () => index(await store.links()));
 
   return {
     canonical(key) {
@@ -105,9 +99,9 @@ export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, loc
             400,
             `${principalId} is the canonical principal of other links; unlink those first`,
           );
-        const stored = await store.putIfAbsent(aliasKey, {
-          principalId,
-          canonicalId,
+        const stored = await store.link({
+          principalId: aliasKey,
+          canonicalId: canonicalKey,
           evidence,
           linkedBy: input.linkedBy,
           createdAt: Date.now(),
@@ -120,7 +114,7 @@ export function createPrincipalLinkService(store: DurableMap<PrincipalLink>, loc
     },
     async unlink(principalId) {
       return lock.withLock("principal-links", async () => {
-        const row = await store.take(foldPrincipalId(principalId));
+        const row = await store.unlink(foldPrincipalId(principalId));
         await refresh(true);
         return row;
       });

@@ -86,11 +86,9 @@ import {
   type DeactivationRecord,
   type IdentityService,
 } from "./identity/identity-service.ts";
-import {
-  createPrincipalLinkService,
-  type PrincipalLink,
-  type PrincipalLinkService,
-} from "./identity/principal-links.ts";
+import { createPrincipalLinkService, type PrincipalLinkService } from "./identity/principal-links.ts";
+import { createUserRoster, type UserRoster } from "./identity/user-roster.ts";
+import { createPostgresUserStore } from "./identity/user-store.ts";
 import type { SlackAccountLink, ComposioReturn } from "./api/routes/composio.ts";
 import { installPrincipalLinks } from "./directory/person.ts";
 import type { ExternalMember } from "./identity/external-members.ts";
@@ -486,6 +484,7 @@ export interface BuiltApp {
   credentialUsage: CredentialUsageSink;
   egressAudit: EgressAuditSink;
   identity: IdentityService;
+  users: UserRoster;
   principalLinks: PrincipalLinkService;
   slackAccounts: DurableMap<SlackAccountLink>;
   composioReturns: DurableMap<ComposioReturn>;
@@ -618,13 +617,15 @@ export function buildApp(
     },
   };
   const advisoryLock: AdvisoryLock = createPostgresAdvisoryLock(pgArtifactMap.pool);
-  const principalLinks = createPrincipalLinkService(artifactMap<PrincipalLink>("principal_links"), advisoryLock);
+  const userStore = createPostgresUserStore(databaseUrl);
+  const principalLinks = createPrincipalLinkService(userStore, advisoryLock);
   installPrincipalLinks(principalLinks);
   const identity = createIdentityService(artifactMap<DeactivationRecord>("deactivated_principals"), {
     directorySyncProtected: config.emailAuthPrincipals,
     externalMembers: artifactMap<ExternalMember>("external_members"),
     principalLinks,
   });
+  const users = createUserRoster(userStore, { principalLinks });
   void identity.refresh().catch(reportFailureAs("startup: hydrate identity", undefined));
   const leaderLease: LeaderLease = createPostgresLeaderLease(pgArtifactMap.pool);
   const configStore = createConfigStore(config.orgId, {
@@ -1745,7 +1746,10 @@ export function buildApp(
   const adminGrantStore = createAdminGrantStore(createPostgresAdminGrantStore(databaseUrl), {
     seed: parseAdminGrants(config.adminGrants, config.orgId) ?? [],
   });
-  const admin = createAdminService(adminGrantStore, { trustedOidcAdminIssuer: config.trustedOidcAdminIssuer });
+  const admin = createAdminService(adminGrantStore, {
+    trustedOidcAdminIssuer: config.trustedOidcAdminIssuer,
+    users,
+  });
   const { strategy: memoryStrategy, memory } = createMemoryStrategy(config.memoryStrategy, {
     agent,
     memory: baseMemory,
@@ -2068,6 +2072,7 @@ export function buildApp(
     sessionSyscalls,
     refreshModels,
     identity,
+    users,
     resolution,
     config: configStore,
     defaultTurnWallClockMs: config.turnWallClockMs,
@@ -2989,6 +2994,7 @@ export function buildApp(
     credentialUsage,
     egressAudit,
     identity,
+    users,
     principalLinks,
     slackAccounts: artifactMap<SlackAccountLink>("slack_accounts"),
     composioReturns,

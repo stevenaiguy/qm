@@ -8,7 +8,12 @@ import type { AdminRole } from "../../../admin/admin-grant-store.ts";
 import type { DirectoryMember } from "../../../directory/directory-store.ts";
 import { computeUsers } from "../../../admin/users.ts";
 import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail } from "../../../admin/invite-email.ts";
-import { externalMemberActive, validEmail, type ExternalMember } from "../../../identity/external-members.ts";
+import {
+  externalMemberActive,
+  isTeammate,
+  validEmail,
+  type ExternalMember,
+} from "../../../identity/external-members.ts";
 import { resolveBranding } from "../../../resolution/branding.ts";
 import { errMessage } from "../../../util/errors.ts";
 import { normalizeInboundExpiresAt } from "../../expiry.ts";
@@ -35,7 +40,8 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
   const participants = (await deps.sessions?.listParticipants()) ?? [];
   const turns = (await deps.sessions?.attributedTurns()) ?? [];
   const grants = (await deps.admin?.listGrants()) ?? [];
-  const users = computeUsers({ participants, turns, grants });
+  const roster = await deps.admin!.users.list();
+  const users = computeUsers({ participants, turns, grants, people: roster.map((r) => r.id) });
   const now = Date.now();
   const externalUsers = ((await deps.identity?.listExternalMembers()) ?? [])
     .map((m) => ({ ...m, status: externalMemberActive(m, now) ? ("active" as const) : ("expired" as const) }))
@@ -44,16 +50,17 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
         Number(b.status === "active") - Number(a.status === "active") ||
         (a.expiresAt ?? Infinity) - (b.expiresAt ?? Infinity),
     );
-  for (const member of externalUsers.filter((m) => m.kind === "teammate" && m.status === "active")) {
-    if (!users.some((u) => samePerson(u.principalId, member.email)))
-      users.push({
-        principalId: member.email,
-        sessionCount: 0,
-        turnCount: 0,
-        lastSeenAt: null,
-        admin: adminStatusFromGrants(grants, member.email),
-      });
-  }
+  const records = new Map(roster.map((r) => [r.id, r]));
+  const rows = users.map((u) => {
+    const record = records.get(personKey(u.principalId));
+    return {
+      ...u,
+      firstSeenAt: record?.firstSeenAt ?? null,
+      source: record?.source ?? null,
+      deactivated: deps.identity?.deactivationSource(u.principalId) !== undefined,
+      offboarded: record?.offboardedAt !== undefined,
+    };
+  });
   const signInUrl = signInUrlOf(deps);
   const inviteEmail = {
     configured: deps.inviteMailer !== undefined,
@@ -64,8 +71,8 @@ export async function listUsers(ctx: ApiCtx): Promise<void> {
   return sendJson(res, 200, {
     scopeId: scope,
     users: actorKey
-      ? users.map((user) => ({ ...user, gatewayActor: gatewayActorId(user.principalId, actorKey) }))
-      : users,
+      ? rows.map((user) => ({ ...user, gatewayActor: gatewayActorId(user.principalId, actorKey) }))
+      : rows,
     grants,
     externalUsers,
     inviteEmail,
@@ -140,7 +147,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
       message: "This account is manually deactivated. Reactivate it before inviting them.",
     });
   const existing = deps.identity.externalMember(email);
-  if (!teammate && existing?.kind === "teammate") return bad("Manage this teammate in Users.");
+  if (!teammate && existing && isTeammate(existing)) return bad("Manage this teammate in Users.");
   const holdsGrant = adminStatusFromGrants(await deps.admin!.listGrants(), email).isAdmin;
   const ownsGrant = existing?.role === "org_admin";
   if (!teammate && ((!existing && holdsGrant) || (await orgMember(ctx, email, !existing))))
@@ -174,6 +181,7 @@ async function inviteUser(ctx: ApiCtx, teammate: boolean): Promise<void> {
     updatedAt: now,
   };
   await deps.identity.putExternalMember(member);
+  if (isTeammate(member)) await deps.admin!.users.note(email, "invite");
   const action = created || readmitted ? "external_user.invite" : "external_user.update";
   audit(deps, {
     principalId: actor.id,
@@ -403,6 +411,7 @@ export async function getUserDetail(ctx: ApiCtx): Promise<void> {
     ...(member?.displayName ? { displayName: member.displayName } : {}),
     admin: adminStatusFromGrants(grants, principalId),
     deactivated: deps.identity?.deactivationSource(principalId) !== undefined,
+    user: await deps.admin!.users.get(principalId),
     stats: { sessions: stats ?? 0 },
     config,
     onboarding,

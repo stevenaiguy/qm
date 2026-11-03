@@ -58,7 +58,7 @@ import type {
   PendingApprovalRecord,
 } from "../types.ts";
 import { scopeId as toScopeId, personalScope } from "../types.ts";
-import { desktopClientForTurn, isSessionTurn } from "./turn-origin.ts";
+import { desktopClientForTurn, introducesPerson, isSessionTurn } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
 import { deriveTurnOutcome, approvalBlocksInput } from "./turn-outcome.ts";
@@ -1210,6 +1210,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         (!!input.swarmGoal || !!openGoal((await deps.sessions.goals([session.id])).get(session.id)));
       if (!input.sessionParticipantIds?.length && !automatedTurn)
         await deps.sessions.addParticipant(session.id, actor.id);
+      if (introducesPerson(input.origin, input)) await deps.users.note(actor.id, "turn");
 
       const delegatedTask = !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
       const syntheticInput =
@@ -3297,6 +3298,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   };
                 if (screen === "unscreened") said = `${unscreenedNotice("mid-turn message")}\n${said}`;
               }
+              if (request && introducesPerson(speaker.origin, request)) await deps.users.note(author, "turn");
               const refreshedInbox =
                 input.surface === "web" &&
                 conversation.kind === "dm" &&

@@ -212,6 +212,13 @@ GET /v1/admin/retention
 GET /v1/admin/users            → roster + admin status (org-wide)
 ```
 
+Users lists the `users` table, the people QM has met: someone joins it on their own first
+message to QM, when invited as a teammate, or when made an admin. Being added to a
+conversation or project they never wrote in does not put them on it. A linked sign-in is
+not a separate user: linking merges its row into the canonical person's. Each
+row carries `firstSeenAt` and `source` (`turn`, `invite` or `admin`); session, turn and
+last-seen counts are computed from activity.
+
 ## External users
 
 Outside collaborators, admitted by email with a role and an expiry; they sign in at the
@@ -257,8 +264,14 @@ one call. Run it from a DM with the admin; it reads private inventory.
    - an admin grant — portal-only, revoked under Admins in the dashboard;
    - computers whose provider can't retire them.
 
+Applying sets `offboardedAt`/`offboardedBy` on the person's row in the `users` table: the response's `user`
+(also on the `user` detail, and `offboarded` in the `users` list) holds when and by whom; the audit log's
+`user.offboard.*` entries are the change list. If that row can't be written, the changes still stand and the
+response carries `userError`. The dashboard hides offboarded people from Users until "Show offboarded" is clicked.
+
 Conversations, memory and files stay as the record. `reactivate_user` turns sign-in back on (even after a
-directory-sync removal) and restores nothing else; owners or admins restore crons, loops, apps and skills
+directory-sync removal), clears `offboardedAt`/`offboardedBy` (the audit log keeps the history), and
+restores nothing else; owners or admins restore crons, loops, apps and skills
 through their usual controls.
 
 ## Scheduling admin-reading work

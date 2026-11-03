@@ -4,6 +4,7 @@ import type { Principal, ScopeId } from "../types.ts";
 import { parseScopeId, scopeId } from "../types.ts";
 import type { AdminGrant, AdminGrantStore, AdminRole } from "./admin-grant-store.ts";
 import { personKey, samePerson } from "../directory/person.ts";
+import type { UserRoster } from "../identity/user-roster.ts";
 
 export type { AdminGrant } from "./admin-grant-store.ts";
 
@@ -31,6 +32,7 @@ export function adminStatusFromGrants(grants: readonly AdminGrant[], principalId
 }
 
 export interface AdminService {
+  users: UserRoster;
   resolveActor(header: string | undefined): Principal | null;
   canAdminister(principal: Principal, target: ScopeId): Promise<boolean>;
   adminStatusOf(principal: Principal): Promise<AdminStatus>;
@@ -59,9 +61,10 @@ export function parseAdminGrants(raw: string | undefined, orgId: string): AdminG
 export interface AdminServiceOptions {
   now?: () => number;
   trustedOidcAdminIssuer?: string;
+  users: UserRoster;
 }
 
-export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOptions = {}): AdminService {
+export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOptions): AdminService {
   const orgId = configOrgId();
   const now = opts.now ?? (() => Date.now());
 
@@ -70,6 +73,7 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
   }
 
   return {
+    users: opts.users,
     resolveActor(header) {
       if (!header) return null;
       const at = header.lastIndexOf("@");
@@ -101,6 +105,7 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
         createdAt: now(),
       };
       const created = await grants.addIfAbsent(grant);
+      await opts.users.note(principalId, "admin");
       return { grant, created };
     },
     listGrants() {
@@ -120,6 +125,7 @@ export function createAdminService(grants: AdminGrantStore, opts: AdminServiceOp
       }
       const grant: AdminGrant = { principalId, scopeId: input.scopeId, role, grantedBy: actor.id, createdAt: now() };
       await grants.add(grant);
+      await opts.users.note(principalId, "admin");
       return grant;
     },
     async revokeGrant(actor, principalId, scope, role) {

@@ -1,6 +1,6 @@
 import { samePerson, samePersonMatcher } from "../../../directory/person.ts";
 import { parseScopeId, scopeId as makeScopeId, type ScopeId } from "../../../types.ts";
-import { errMessage } from "../../../util/errors.ts";
+import { errMessage, reportFailure } from "../../../util/errors.ts";
 import { sendJson } from "../../http.ts";
 import { audit, authorizeAdmin, isObj, orgScope } from "../shared.ts";
 import { type ApiCtx } from "../route.ts";
@@ -105,7 +105,12 @@ export async function offboardUser(ctx: ApiCtx): Promise<void> {
     }
     changes.push(change);
   }
-  return sendJson(res, 200, { principalId, applied: input.apply === true, changes });
+  if (input.apply !== true) return sendJson(res, 200, { principalId, applied: false, changes });
+  const recorded = await deps.admin!.users.markOffboarded(principalId, actor.id).then(
+    (user) => ({ user }),
+    (e: unknown) => (reportFailure("offboard: record offboarding", e), { userError: errMessage(e) }),
+  );
+  return sendJson(res, 200, { principalId, applied: true, changes, ...recorded });
 }
 
 export async function reactivateUser(ctx: ApiCtx): Promise<void> {
@@ -121,5 +126,9 @@ export async function reactivateUser(ctx: ApiCtx): Promise<void> {
     resource: principalId,
     scopeLabel: orgScope(deps),
   });
-  return sendJson(res, 200, { principalId, active: true });
+  const recorded = await deps.admin!.users.markReactivated(principalId).then(
+    (user) => ({ user }),
+    (e: unknown) => (reportFailure("reactivate: clear offboarding", e), { userError: errMessage(e) }),
+  );
+  return sendJson(res, 200, { principalId, active: true, ...recorded });
 }

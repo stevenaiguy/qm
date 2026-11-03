@@ -108,7 +108,11 @@ test("user detail: offboarding previews, applies after confirming, then offers r
       "POST /users/alex@example.com/offboard": ({ body }) => (
         calls.push(["offboard", body]),
         body.apply
-          ? { applied: true, changes: changes.map((c, i) => ({ ...c, result: i ? "failed" : "done", error: "boom" })) }
+          ? {
+              applied: true,
+              changes: changes.map((c, i) => ({ ...c, result: i ? "failed" : "done", error: "boom" })),
+              user: { id: "alex@example.com", offboardedAt: Date.UTC(2026, 0, 2), offboardedBy: "admin@example.com" },
+            }
           : { applied: false, changes }
       ),
       "POST /users/alex@example.com/reactivate": () => (calls.push(["reactivate"]), { active: true }),
@@ -125,13 +129,39 @@ test("user detail: offboarding previews, applies after confirming, then offers r
   button(page.host, "Offboard").click();
   await page.settle();
   assert.match(page.host.textContent!, /1 failed\. Preview again to retry\./);
+  assert.match(page.host.textContent!, /Offboarded .* by admin@example\.com/, "the card shows the user row's record");
   button(page.host, "Reactivate").click();
   await page.settle();
   assert.match(page.host.textContent!, /Sign-in is back on\./);
+  assert.doesNotMatch(page.host.textContent!, /Offboarded .* by admin@example\.com/);
   assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
     ["offboard", {}],
     ["offboard", { apply: true }],
     ["reactivate"],
   ]);
+  page.close();
+});
+
+test("users: offboarded people are badged and hidden until shown", async () => {
+  const page = await mountPage("/settings/users", {
+    "GET /users": {
+      users: [
+        { principalId: "stay@example.com", sessionCount: 1, turnCount: 1 },
+        { principalId: "gone@example.com", sessionCount: 1, turnCount: 1, offboarded: true, deactivated: true },
+      ],
+      grants: [],
+      externalUsers: [],
+    },
+  });
+  await page.settle();
+  assert.doesNotMatch(page.host.textContent!, /gone@example\.com/);
+  assert.match(page.host.textContent!, /1 users · 0 admins · 1 offboarded hidden/);
+  const toggle = [...page.document.querySelectorAll("button")].find((b) =>
+    /Show offboarded \(1\)/.test(b.textContent!),
+  )!;
+  toggle.click();
+  await page.settle();
+  assert.match(page.host.textContent!, /gone@example\.com\s*offboarded/);
+  assert.match(page.host.textContent!, /2 users · 0 admins/);
   page.close();
 });
