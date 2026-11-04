@@ -672,9 +672,6 @@ a.chat-row-open {
   font-size: var(--session-title-size);
   white-space: nowrap;
 }
-/* No percentage floor: status marks plus a fixed floor could outgrow the
-   row once hover reserves room for the action buttons, pushing the title
-   under them. */
 .session .title .tl {
   flex: 1 1 auto;
   min-width: 0;
